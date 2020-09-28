@@ -9,17 +9,17 @@ import java.util.HashMap;
 import java.util.Map;
 
 /**
- * DruidTestMain
+ * DruidDebugTest
  * Sep 27, 2020
  * @author wanghui
  */
-public class DruidTestMain {
+public class DruidDebugTest {
 
     public static void main(String[] args) throws Exception {
         Map<String, String> map = new HashMap<String, String>();
-        String url = "jdbc:mysql://hx-hfe_hts-HFE_HTS-master.db.tuniu-sit.org:3306/hfe_hts";
-        String username = "HFE_HTS_rw";
-        String password = "tuniu520";
+        String url = "jdbc:mysql://com.example:3306/databasename";
+        String username = "wang";
+        String password = "123456";
         String driverClass = "com.mysql.jdbc.Driver";
 
         map.put("driverClass", driverClass);

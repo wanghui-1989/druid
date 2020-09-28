@@ -36,6 +36,7 @@ public class PreparedStatementPool {
 
     private final static Log              LOG = LogFactory.getLog(PreparedStatementPool.class);
 
+    //LRU缓存，缓存预处理语句
     private final LRUCache                map;
     private final DruidAbstractDataSource dataSource;
 

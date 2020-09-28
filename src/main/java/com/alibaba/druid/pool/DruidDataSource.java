@@ -924,6 +924,7 @@ public class DruidDataSource extends DruidAbstractDataSource implements DruidDat
             if (createScheduler != null && asyncInit) {
                 //异步初始化Connection
                 for (int i = 0; i < initialSize; ++i) {
+                    //提交创建连接任务
                     submitCreateTask(true);
                 }
             } else if (!asyncInit) {
@@ -1555,6 +1556,7 @@ public class DruidDataSource extends DruidAbstractDataSource implements DruidDat
 
         Connection conn = holder.getConnection();
         if (conn != null) {
+            //关闭物理连接
             JdbcUtils.close(conn);
         }
 
@@ -1605,6 +1607,7 @@ public class DruidDataSource extends DruidAbstractDataSource implements DruidDat
 
         for (boolean createDirect = false; ; ) {
             if (createDirect) {
+                //直接创建新的连接
                 createStartNanosUpdater.set(this, System.nanoTime());
                 if (creatingCountUpdater.compareAndSet(this, 0, 1)) {
                     PhysicalConnectionInfo pyConnInfo = DruidDataSource.this.createPhysicalConnection();
@@ -1685,6 +1688,7 @@ public class DruidDataSource extends DruidAbstractDataSource implements DruidDat
                     //异步初始化
                     ScheduledThreadPoolExecutor executor = (ScheduledThreadPoolExecutor) createScheduler;
                     if (executor.getQueue().size() > 0) {
+                        //直接创建新的连接
                         createDirect = true;
                         continue;
                     }
@@ -1704,8 +1708,10 @@ public class DruidDataSource extends DruidAbstractDataSource implements DruidDat
                     }
 
                     activeCount++;
+                    //设置holder活跃状态
                     holder.active = true;
                     if (activeCount > activePeak) {
+                        //更新活跃计数峰值
                         activePeak = activeCount;
                         activePeakTime = System.currentTimeMillis();
                     }
@@ -1930,7 +1936,7 @@ public class DruidDataSource extends DruidAbstractDataSource implements DruidDat
             if (!isSameThread) {
                 //和创建线程不是同一个线程
                 final ReentrantLock lock = pooledConnection.lock;
-                //加锁
+                //加锁，这个锁和holder持有的锁是同一个锁对象
                 lock.lock();
                 try {
                     holder.reset();
@@ -1943,6 +1949,7 @@ public class DruidDataSource extends DruidAbstractDataSource implements DruidDat
             }
 
             if (holder.discard) {
+                //丢弃
                 return;
             }
 
@@ -1952,9 +1959,11 @@ public class DruidDataSource extends DruidAbstractDataSource implements DruidDat
             }
 
             if (physicalConnection.isClosed()) {
+                //如果物理连接已关闭
                 lock.lock();
                 try {
                     if (holder.active) {
+                        //变更holder的活跃状态
                         activeCount--;
                         holder.active = false;
                     }
@@ -1987,6 +1996,8 @@ public class DruidDataSource extends DruidAbstractDataSource implements DruidDat
             }
 
             if (!enable) {
+                //禁用
+                //丢弃连接，关闭物理连接
                 discardConnection(holder);
                 return;
             }
@@ -2002,33 +2013,44 @@ public class DruidDataSource extends DruidAbstractDataSource implements DruidDat
                 }
             }
 
+            //加锁
             lock.lock();
             try {
                 if (holder.active) {
+                    //活跃数量-1
                     activeCount--;
+                    //变更holder活跃状态
                     holder.active = false;
                 }
+
+                //更新connection关闭计数，可以与回收计数作对比使用
                 closeCount++;
 
+                //回收到空闲连接池connections的末尾
                 result = putLast(holder, currentTimeMillis);
+                //更新回收计数
                 recycleCount++;
             } finally {
                 lock.unlock();
             }
 
             if (!result) {
+                //putLast返回false，表示连接数已经超过配置的最大活跃数了，或者已经被丢弃，直接关闭。
                 JdbcUtils.close(holder.conn);
                 LOG.info("connection recyle failed.");
             }
         } catch (Throwable e) {
+            //清空连接的PreparedStatementPool
             holder.clearStatementCache();
 
             if (!holder.discard) {
+                //异常时，丢弃连接
                 discardConnection(holder);
                 holder.discard = true;
             }
 
             LOG.error("recyle error", e);
+            //更新回收错误计数
             recycleErrorCountUpdater.incrementAndGet(this);
         }
     }
@@ -2172,11 +2194,16 @@ public class DruidDataSource extends DruidAbstractDataSource implements DruidDat
 
     boolean putLast(DruidConnectionHolder e, long lastActiveTimeMillis) {
         if (poolingCount >= maxActive || e.discard) {
+            //如果空闲连接数量 >= 配置的最大活跃数 或者 hoder被丢弃
+            //不做put操作，即不回收到空闲连接池，直接返回false
             return false;
         }
 
+        //更新holder的最后活跃时间
         e.lastActiveTimeMillis = lastActiveTimeMillis;
+        //将holder放到poolingCount位置
         connections[poolingCount] = e;
+        //空闲连接计数+1
         incrementPoolingCount();
 
         if (poolingCount > poolingPeak) {
@@ -2185,7 +2212,9 @@ public class DruidDataSource extends DruidAbstractDataSource implements DruidDat
             poolingPeakTime = lastActiveTimeMillis;
         }
 
+        //唤醒一个消费者线程
         notEmpty.signal();
+        //更新计数
         notEmptySignalCount++;
 
         return true;
@@ -2652,13 +2681,17 @@ public class DruidDataSource extends DruidAbstractDataSource implements DruidDat
                 lock.lock();
                 try {
                     if (closed || closing) {
+                        //已关闭或者关闭中，清空创建连接任务
                         clearCreateTask(taskId);
                         return;
                     }
 
+                    //连接生产者需要阻塞等待
                     boolean emptyWait = true;
 
+                    //有创建错误 并且 空闲连接池为空
                     if (createError != null && poolingCount == 0) {
+                        //生产者不用等了
                         emptyWait = false;
                     }
 

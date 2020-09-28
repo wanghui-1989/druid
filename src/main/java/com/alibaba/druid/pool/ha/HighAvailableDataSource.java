@@ -46,6 +46,7 @@ import com.alibaba.druid.support.logging.LogFactory;
 
 /**
  * DataSource class which contains multiple DataSource objects.
+ * 高可用，即冗余存储，存多个连接池。再做好连接池的负载均衡或者路由。
  *
  * @author DigitalSonic
  */
