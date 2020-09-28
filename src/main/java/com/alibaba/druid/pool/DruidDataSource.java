@@ -112,6 +112,7 @@ public class DruidDataSource extends DruidAbstractDataSource implements DruidDat
     private int keepAliveCheckCount = 0;
     private int activePeak = 0;
     private long activePeakTime = 0;
+    //空闲连接池数量峰值
     private int poolingPeak = 0;
     private long poolingPeakTime = 0;
     // store 存储空闲Connection
@@ -122,6 +123,7 @@ public class DruidDataSource extends DruidAbstractDataSource implements DruidDat
     private int activeCount = 0;
     // 丢弃的Connection数量
     private volatile long discardCount = 0;
+    //处于等待中的消费者线程数量
     private int notEmptyWaitThreadCount = 0;
     private int notEmptyWaitThreadPeak = 0;
     // 存储待删除的Connection
@@ -796,6 +798,7 @@ public class DruidDataSource extends DruidAbstractDataSource implements DruidDat
 
     public void init() throws SQLException {
         if (inited) {
+            //已完成初始化，返回
             return;
         }
 
@@ -950,7 +953,7 @@ public class DruidDataSource extends DruidAbstractDataSource implements DruidDat
                 }
 
                 if (poolingCount > 0) {
-                    //保存数量，方便获取最后一个Connection的下标
+                    //更新空闲连接池数量峰值
                     poolingPeak = poolingCount;
                     poolingPeakTime = System.currentTimeMillis();
                 }
@@ -965,22 +968,30 @@ public class DruidDataSource extends DruidAbstractDataSource implements DruidDat
 
             //initedLatch==2。主线程阻塞，等待Connection创建和销毁线程初始化和运行起来
             initedLatch.await();
+            //初始化完成
             init = true;
 
             initedTime = new Date();
+            //jmx 注册DruidDataSource MBean
             registerMbean();
 
             if (connectError != null && poolingCount == 0) {
+                //连接异常 并且 一个连接也没创建出来 应该说是一个有效的连接也没创建出来，
+                //证明可能是网络、数据库地址、用户名、密码等有问题
                 throw connectError;
             }
 
             if (keepAlive) {
+                //因为配置的最小空闲连接数，这里要创建连接达到这个要求
                 // async fill to minIdle
                 if (createScheduler != null) {
+                    //异步初始化
                     for (int i = 0; i < minIdle; ++i) {
+                        //提交连接创建任务
                         submitCreateTask(true);
                     }
                 } else {
+                    //同步初始化，唤醒生产者线程，创建连接
                     this.emptySignal();
                 }
             }
@@ -998,6 +1009,7 @@ public class DruidDataSource extends DruidAbstractDataSource implements DruidDat
             throw e;
 
         } finally {
+            //DataSource完成初始化，释放锁，打info日志
             inited = true;
             lock.unlock();
 
@@ -1403,6 +1415,7 @@ public class DruidDataSource extends DruidAbstractDataSource implements DruidDat
         init();
 
         if (filters.size() > 0) {
+            //过滤器，要代理
             FilterChainImpl filterChain = new FilterChainImpl(this);
             return filterChain.dataSource_connect(this, maxWaitMillis);
         } else {
@@ -1569,11 +1582,13 @@ public class DruidDataSource extends DruidAbstractDataSource implements DruidDat
 
     private DruidPooledConnection getConnectionInternal(long maxWait) throws SQLException {
         if (closed) {
+            //已关闭
             connectErrorCountUpdater.incrementAndGet(this);
             throw new DataSourceClosedException("dataSource already closed at " + new Date(closeTimeMillis));
         }
 
         if (!enable) {
+            //已禁用
             connectErrorCountUpdater.incrementAndGet(this);
 
             if (disableException != null) {
@@ -1667,6 +1682,7 @@ public class DruidDataSource extends DruidAbstractDataSource implements DruidDat
 
                 if (createScheduler != null && poolingCount == 0 && activeCount < maxActive && creatingCountUpdater
                         .get(this) == 0 && createScheduler instanceof ScheduledThreadPoolExecutor) {
+                    //异步初始化
                     ScheduledThreadPoolExecutor executor = (ScheduledThreadPoolExecutor) createScheduler;
                     if (executor.getQueue().size() > 0) {
                         createDirect = true;
@@ -1675,8 +1691,10 @@ public class DruidDataSource extends DruidAbstractDataSource implements DruidDat
                 }
 
                 if (maxWait > 0) {
+                    //有超时时间
                     holder = pollLast(nanos);
                 } else {
+                    //无超时时间
                     holder = takeLast();
                 }
 
@@ -1874,6 +1892,7 @@ public class DruidDataSource extends DruidAbstractDataSource implements DruidDat
             LOG.warn("get/close not same thread");
         }
 
+        //获取包装中的原始物理连接
         final Connection physicalConnection = holder.conn;
 
         if (pooledConnection.traceEnable) {
@@ -1901,13 +1920,17 @@ public class DruidDataSource extends DruidAbstractDataSource implements DruidDat
         try {
             // check need to rollback?
             if ((!isAutoCommit) && (!isReadOnly)) {
+                //是手动提交 并且 不是只读
+                //回滚事务
                 pooledConnection.rollback();
             }
 
             // reset holder, restore default settings, clear warnings
             boolean isSameThread = pooledConnection.ownerThread == Thread.currentThread();
             if (!isSameThread) {
+                //和创建线程不是同一个线程
                 final ReentrantLock lock = pooledConnection.lock;
+                //加锁
                 lock.lock();
                 try {
                     holder.reset();
@@ -1915,6 +1938,7 @@ public class DruidDataSource extends DruidAbstractDataSource implements DruidDat
                     lock.unlock();
                 }
             } else {
+                //和创建线程是同一个线程，不需要加锁
                 holder.reset();
             }
 
@@ -2156,6 +2180,7 @@ public class DruidDataSource extends DruidAbstractDataSource implements DruidDat
         incrementPoolingCount();
 
         if (poolingCount > poolingPeak) {
+            //更新空闲连接池数量峰值
             poolingPeak = poolingCount;
             poolingPeakTime = lastActiveTimeMillis;
         }
@@ -2168,25 +2193,37 @@ public class DruidDataSource extends DruidAbstractDataSource implements DruidDat
 
     DruidConnectionHolder takeLast() throws InterruptedException, SQLException {
         try {
+            //空闲连接池为空 和有超时的pollLast(long nanos)逻辑类似
             while (poolingCount == 0) {
+                //先唤醒生产线程，创建连接
+                //现在没有空闲连接，如果没有运行中的生产线程，或者说不唤醒生产线程的话，那么这个方法一定获取不到连接，
+                //或者说即使到了超时时间，也获取不到连接。因为没人生产连接。
                 emptySignal(); // send signal to CreateThread create connection
 
                 if (failFast && isFailContinuous()) {
+                    //快速失败 和 连续失败
                     throw new DataSourceNotAvailableException(createError);
                 }
 
+                //等待中的消费者线程数量+1
                 notEmptyWaitThreadCount++;
                 if (notEmptyWaitThreadCount > notEmptyWaitThreadPeak) {
+                    //peak 峰值的意思。
+                    //如果等待数量大于记录的峰值，更新峰值。
                     notEmptyWaitThreadPeak = notEmptyWaitThreadCount;
                 }
                 try {
+                    //消费者线程阻塞等待
                     notEmpty.await(); // signal by recycle or creator
                 } finally {
+                    //唤醒后等待计数-1
                     notEmptyWaitThreadCount--;
                 }
+                //消费者等待计数+1
                 notEmptyWaitCount++;
 
                 if (!enable) {
+                    //禁用
                     connectErrorCountUpdater.incrementAndGet(this);
                     if (disableException != null) {
                         throw disableException;
@@ -2196,41 +2233,64 @@ public class DruidDataSource extends DruidAbstractDataSource implements DruidDat
                 }
             }
         } catch (InterruptedException ie) {
+            //当前消费者被中断了，此时要考虑锁被当前消费者持有，要唤醒另一个消费者线程
             notEmpty.signal(); // propagate to non-interrupted thread
+            //消费者唤醒计数+1
             notEmptySignalCount++;
+            //抛出异常，快速跳到外部cache或者finally代码块，里面会释放锁。这里应该是考虑了要快速释放锁。
             throw ie;
         }
 
+        //空闲连接池connections非空 下面的逻辑和有超时pollLast(long nanos)里面的逻辑一样，取最后一个
+        //空闲连接池计数poolingCount减一，减一后poolingCount就是最后一个连接的数组下标
         decrementPoolingCount();
+        //取最后一个空闲连接
         DruidConnectionHolder last = connections[poolingCount];
+        //将空闲连接池对应位置置为null
         connections[poolingCount] = null;
 
+        //返回连接
         return last;
     }
 
     private DruidConnectionHolder pollLast(long nanos) throws InterruptedException, SQLException {
+        //estimate 预估、估计的意思。表示距离超时还有多少纳秒。
         long estimate = nanos;
 
         for (; ; ) {
+            //空闲连接池为空 和无超时的takeLast()逻辑类似
             if (poolingCount == 0) {
+                //先唤醒生产线程，创建连接
+                //现在没有空闲连接，如果没有运行中的生产线程，或者说不唤醒生产线程的话，那么这个方法一定获取不到连接，
+                //或者说即使到了超时时间，也获取不到连接。因为没人生产连接。
                 emptySignal(); // send signal to CreateThread create connection
 
                 if (failFast && isFailContinuous()) {
+                    //快速失败 和 连续失败
                     throw new DataSourceNotAvailableException(createError);
                 }
 
                 if (estimate <= 0) {
+                    //等待超时了，设置当前线程实际等待了多久。ThreadLocal类型
                     waitNanosLocal.set(nanos - estimate);
+                    //超时返回null
                     return null;
                 }
 
+                //处于等待中的消费者线程数量+1
                 notEmptyWaitThreadCount++;
                 if (notEmptyWaitThreadCount > notEmptyWaitThreadPeak) {
+                    //peak 峰值的意思。
+                    //如果等待数量大于记录的峰值，更新峰值。
                     notEmptyWaitThreadPeak = notEmptyWaitThreadCount;
                 }
 
                 try {
                     long startEstimate = estimate;
+
+                    //消费者线程等待超时，此时之前唤醒的生产者线程正在创建连接，生产者线程创建完连接后会调用notEmpty.signal()，唤醒消费者线程，
+                    //消费者线程被提前唤醒，或者阻塞超时后，都会更新estimate的值，这个值还是为距离超时还有多少纳秒。
+                    //详见com.alibaba.druid.pool.DruidDataSource.put(com.alibaba.druid.pool.DruidConnectionHolder, long)
                     estimate = notEmpty.awaitNanos(estimate); // signal by
                     // recycle or
                     // creator
@@ -2238,6 +2298,7 @@ public class DruidDataSource extends DruidAbstractDataSource implements DruidDat
                     notEmptyWaitNanos += (startEstimate - estimate);
 
                     if (!enable) {
+                        //禁用
                         connectErrorCountUpdater.incrementAndGet(this);
 
                         if (disableException != null) {
@@ -2247,28 +2308,45 @@ public class DruidDataSource extends DruidAbstractDataSource implements DruidDat
                         throw new DataSourceDisableException();
                     }
                 } catch (InterruptedException ie) {
+                    //当前消费者被中断了，此时要考虑锁被当前消费者持有，要唤醒另一个消费者线程
                     notEmpty.signal(); // propagate to non-interrupted thread
+                    //消费者唤醒计数+1
                     notEmptySignalCount++;
+                    //抛出异常，快速跳到外部cache或者finally代码块，里面会释放锁。这里应该是考虑了要快速释放锁。
                     throw ie;
                 } finally {
+                    //等待中的消费者线程数量-1s
                     notEmptyWaitThreadCount--;
                 }
 
+                //消费者线程被唤醒，或者达到超时时间醒来后。
+                //判断如果此时空闲连接池还是为空，可能被别的消费者拿走了，或者创建失败等。
                 if (poolingCount == 0) {
+                    //空闲连接池为空
                     if (estimate > 0) {
+                        //还没有达到超时时间，继续
                         continue;
                     }
 
+                    //否则达到了超时时间
+                    //更新等了多久了
                     waitNanosLocal.set(nanos - estimate);
+                    //超时，返回null
                     return null;
                 }
             }
 
+            //空闲连接池connections非空 下面的逻辑和永不超时takeLast()里面的逻辑一样，取最后一个
+            //空闲连接池计数poolingCount减一，减一后poolingCount就是最后一个连接的数组下标
             decrementPoolingCount();
+            //取最后一个空闲连接
             DruidConnectionHolder last = connections[poolingCount];
+            //将空闲连接池对应位置置为null
             connections[poolingCount] = null;
 
+            //因为入参传了超时时间，这里计算下wait时间
             long waitNanos = nanos - estimate;
+            //更新
             last.setLastNotEmptyWaitNanos(waitNanos);
 
             return last;
@@ -2481,11 +2559,13 @@ public class DruidDataSource extends DruidAbstractDataSource implements DruidDat
     protected boolean put(PhysicalConnectionInfo physicalConnectionInfo) {
         DruidConnectionHolder holder = null;
         try {
+            //将物理连接和创建它的连接池关联封装到一起
             holder = new DruidConnectionHolder(DruidDataSource.this, physicalConnectionInfo);
         } catch (SQLException ex) {
             lock.lock();
             try {
                 if (createScheduler != null) {
+                    //是异步初始化，删除对应taskId的任务
                     clearCreateTask(physicalConnectionInfo.createTaskId);
                 }
             } finally {
@@ -2499,33 +2579,43 @@ public class DruidDataSource extends DruidAbstractDataSource implements DruidDat
     }
 
     private boolean put(DruidConnectionHolder holder, long createTaskId) {
+        //要加锁
         lock.lock();
         try {
+            //避免新建超了的判断
             if (poolingCount >= maxActive) {
+                //空闲连接数量 >= 配置的最大活跃数
                 if (createScheduler != null) {
+                    //异步初始化，删除对应taskId的任务，避免建超了
                     clearCreateTask(createTaskId);
                 }
                 return false;
             }
 
-            //放入空闲连接池
+            //放入空闲连接池，对应下标
             connections[poolingCount] = holder;
             incrementPoolingCount();
 
+            //更新下标
             if (poolingCount > poolingPeak) {
                 poolingPeak = poolingCount;
                 poolingPeakTime = System.currentTimeMillis();
             }
 
-            //放了一个，只唤醒一个
+            //只放了一个空闲连接，所以只唤醒一个消费者线程
             notEmpty.signal();
             notEmptySignalCount++;
 
             if (createScheduler != null) {
+                //异步初始化
+                //删除对应taskId的创建连接任务
                 clearCreateTask(createTaskId);
 
-                if (poolingCount + createTaskCount < notEmptyWaitThreadCount //
+                //空闲连接池数 + 创建连接任务数 < 等待连接的消费者线程数
+                if (poolingCount + createTaskCount < notEmptyWaitThreadCount
+                        //活跃数 + 空闲数 + 创建连接任务数 < 配置的最大活跃连接数
                         && activeCount + poolingCount + createTaskCount < maxActive) {
+                    //唤醒生产者线程
                     emptySignal();
                 }
             }
@@ -2779,6 +2869,7 @@ public class DruidDataSource extends DruidAbstractDataSource implements DruidDat
                     if (emptyWait) {
                         //生产者线程需要等待
                         // 必须存在线程等待，才创建连接
+                        //等待获取连接的消费者线程数量超过了已生产的空闲连接数的话，就可能要立即生产新的连接
                         if (poolingCount >= notEmptyWaitThreadCount //空闲连接数量 >= 等待获取连接的消费者线程数量
                                 && (!(keepAlive && activeCount + poolingCount < minIdle))
                                 //不保持存活，或者活跃连接数量+空闲连接数量 >= 配置的最小空闲连接数量
@@ -2786,6 +2877,11 @@ public class DruidDataSource extends DruidAbstractDataSource implements DruidDat
                         ) {
                             //生产者线程阻塞等待
                             empty.await();
+                            //这里在虚假唤醒之后，可能出现的情况有
+                            //1.在下一个if判断里，达到了最大活跃数限制，再次进入阻塞或者continue。这个逻辑没问题
+                            //2.在下一个if判断里，没有达到最大活跃数限制，会走下面的创建连接的逻辑，
+                            //因为没有达到最大活跃数限制，所以是可以创建新的连接的，只是新的连接可能不是被立即需要的，处于空闲状态。
+                            //并且由于虚假唤醒的概率很低，这个发生的概率也很低。逻辑上也没有问题。
                         }
 
                         // 防止创建超过maxActive数量的连接
@@ -2793,37 +2889,47 @@ public class DruidDataSource extends DruidAbstractDataSource implements DruidDat
                             //达到或者超过了配置的最大活跃连接数，生产者线程阻塞等待
                             empty.await();
                             //因为超了，唤醒后不会继续执行后面的创建连接逻辑，而是会重新走for循环，重新判断
+                            //也要考虑虚假唤醒
                             continue;
                         }
                     }
 
                 } catch (InterruptedException e) {
+                    //保存最新的创建异常和时间
                     lastCreateError = e;
                     lastErrorTimeMillis = System.currentTimeMillis();
 
                     if (!closing) {
+                        //如果不是关闭连接池造成的InterruptedException，记录日志
                         LOG.error("create connection Thread Interrupted, url: " + jdbcUrl, e);
                     }
                     break;
                 } finally {
+                    //生产者是否等待的判断逻辑走完，释放锁
                     lock.unlock();
                 }
 
+
+                //开始创建连接
                 PhysicalConnectionInfo connection = null;
 
                 try {
+                    //创建连接
                     connection = createPhysicalConnection();
                 } catch (SQLException e) {
                     LOG.error("create connection SQLException, url: " + jdbcUrl + ", errorCode " + e.getErrorCode() + ", state " + e
                             .getSQLState(), e);
-
+                    //创建连接失败，或者执行验证sql失败等
                     errorCount++;
                     if (errorCount > connectionErrorRetryAttempts && timeBetweenConnectErrorMillis > 0) {
                         // fail over retry attempts
+                        //设置为连续失败
                         setFailContinuous(true);
                         if (failFast) {
+                            //快速失败
                             lock.lock();
                             try {
+                                //激活所有消费者线程
                                 notEmpty.signalAll();
                             } finally {
                                 lock.unlock();
@@ -2831,12 +2937,15 @@ public class DruidDataSource extends DruidAbstractDataSource implements DruidDat
                         }
 
                         if (breakAfterAcquireFailure) {
+                            //失败时退出for循环，退出线程
                             break;
                         }
 
                         try {
+                            //睡眠，默认500毫秒
                             Thread.sleep(timeBetweenConnectErrorMillis);
                         } catch (InterruptedException interruptEx) {
+                            //可能是关闭线程池操作导致的中断，退出循环，退出线程。但是这里应该像上面一样加个判断吧？？
                             break;
                         }
                     }
@@ -2851,15 +2960,19 @@ public class DruidDataSource extends DruidAbstractDataSource implements DruidDat
                 }
 
                 if (connection == null) {
+                    //重新走循环
                     continue;
                 }
 
+                //将新创建的连接放到空闲连接池connections中去
                 boolean result = put(connection);
                 if (!result) {
+                    //放到空闲连接池失败，关闭物理连接，注意关闭的不是连接的包装对象，是关闭真实物理连接。这里和mybatis不一样。
                     JdbcUtils.close(connection.getPhysicalConnection());
                     LOG.info("put physical connection to pool failed.");
                 }
 
+                //重置下一次循环错误数为0
                 errorCount = 0; // reset errorCount
             }
         }
@@ -2879,6 +2992,7 @@ public class DruidDataSource extends DruidAbstractDataSource implements DruidDat
                 // 从前面开始删除
                 try {
                     if (closed) {
+                        //连接池已关闭
                         break;
                     }
 
@@ -2889,6 +3003,7 @@ public class DruidDataSource extends DruidAbstractDataSource implements DruidDat
                     }
 
                     if (Thread.interrupted()) {
+                        //响应中断
                         break;
                     }
 

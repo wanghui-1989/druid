@@ -62,10 +62,12 @@ public class DruidPooledConnection extends PoolableWrapper implements javax.sql.
     protected volatile   boolean               traceEnable          = false;
     private   volatile   boolean               disable              = false;
     protected volatile   boolean               closed               = false;
+    //创建连接的线程
     protected final      Thread                ownerThread;
     private              long                  connectedTimeMillis;
     private              long                  connectedTimeNano;
     private volatile     boolean               running              = false;
+    //当前连接是否被丢弃。是丢弃的话，不会被回收。
     private volatile     boolean               abandoned            = false;
     protected            StackTraceElement[]   connectStackTrace;
     protected            Throwable             disableError         = null;
@@ -233,6 +235,7 @@ public class DruidPooledConnection extends PoolableWrapper implements javax.sql.
     @Override
     public void close() throws SQLException {
         if (this.disable) {
+            //当前连接被禁用
             return;
         }
 
@@ -244,28 +247,35 @@ public class DruidPooledConnection extends PoolableWrapper implements javax.sql.
             return;
         }
 
+        //获取对应数据源
         DruidAbstractDataSource dataSource = holder.getDataSource();
+        //判断当前线程和创建连接的线程是不是同一个线程
         boolean isSameThread = this.getOwnerThread() == Thread.currentThread();
         
         if (!isSameThread) {
+            //不是同一个线程，允许异步关闭连接
             dataSource.setAsyncCloseConnectionEnable(true);
         }
         
         if (dataSource.isAsyncCloseConnectionEnable()) {
+            //允许异步关闭连接，调用同步关闭方法。
             syncClose();
             return;
         }
 
+        //同步关闭
         for (ConnectionEventListener listener : holder.getConnectionEventListeners()) {
+            //发布连接关闭事件
             listener.connectionClosed(new ConnectionEvent(this));
         }
 
-        
+        //代理过滤器链
         List<Filter> filters = dataSource.getProxyFilters();
         if (filters.size() > 0) {
             FilterChainImpl filterChain = new FilterChainImpl(dataSource);
             filterChain.dataSource_recycle(this);
         } else {
+            //无代理，回收连接
             recycle();
         }
 
@@ -308,6 +318,7 @@ public class DruidPooledConnection extends PoolableWrapper implements javax.sql.
 
     public void recycle() throws SQLException {
         if (this.disable) {
+            //当前连接被禁用
             return;
         }
 
@@ -320,13 +331,16 @@ public class DruidPooledConnection extends PoolableWrapper implements javax.sql.
         }
 
         if (!this.abandoned) {
+            //当前连接不是被丢弃的
             DruidAbstractDataSource dataSource = holder.getDataSource();
+            //对应数据源回收该连接
             dataSource.recycle(this);
         }
 
         this.holder = null;
         conn = null;
         transactionInfo = null;
+        //连接代理对象被置为已关闭状态
         closed = true;
     }
 
