@@ -82,6 +82,7 @@ public class DruidDataSourceStatLoggerImpl extends DruidDataSourceStatLoggerAdap
         if (!isLogEnable()) {
             return;
         }
+        //用map存储数据，使用Json序列化，记录日志
         Map<String, Object> map = new LinkedHashMap<String, Object>();
 
         map.put("url", statValue.url);

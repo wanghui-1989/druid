@@ -89,9 +89,11 @@ public class DruidDriver implements Driver, DruidDriverMBean {
 
     public static boolean registerDriver(Driver driver) {
         try {
+            //注册驱动类
             DriverManager.registerDriver(driver);
 
             try {
+                //jmx配置，具体见com.alibaba.druid.proxy.DruidDriverMBean
                 MBeanServer mbeanServer = ManagementFactory.getPlatformMBeanServer();
 
                 ObjectName objectName = new ObjectName(MBEAN_NAME);

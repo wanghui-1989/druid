@@ -170,7 +170,9 @@ public class DruidDataSourceFactory implements ObjectFactory {
 
     @SuppressWarnings("rawtypes")
     public static DataSource createDataSource(Map properties) throws Exception {
+        //创建数据源，默认使用非公平锁，读取System.getProperties()配置，set数据源配置
         DruidDataSource dataSource = new DruidDataSource();
+        //配置数据源，这里可以选择是否初始化创建的数据源
         config(dataSource, properties);
         return dataSource;
     }

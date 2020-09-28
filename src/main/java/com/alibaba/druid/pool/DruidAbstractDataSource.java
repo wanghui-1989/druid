@@ -240,7 +240,9 @@ public abstract class DruidAbstractDataSource extends WrapperAdapter implements 
     protected boolean                                  useOracleImplicitCache                    = true;
 
     protected ReentrantLock                            lock;
+    //生产者消费者模型中的监视器，感觉命名反了
     protected Condition                                notEmpty;
+    //生产者消费者模型中的监视器，感觉命名反了
     protected Condition                                empty;
 
     protected ReentrantLock                            activeConnectionLock                      = new ReentrantLock();
@@ -268,6 +270,7 @@ public abstract class DruidAbstractDataSource extends WrapperAdapter implements 
     private boolean                                    asyncCloseConnectionEnable                = false;
     protected int                                      maxCreateTaskCount                        = 3;
     protected boolean                                  failFast                                  = false;
+    //连续失败
     protected volatile int                             failContinuous                            = 0;
     protected volatile long                            failContinuousTimeMillis                  = 0L;
     protected ScheduledExecutorService                 destroyScheduler;
@@ -289,7 +292,9 @@ public abstract class DruidAbstractDataSource extends WrapperAdapter implements 
     public DruidAbstractDataSource(boolean lockFair){
         lock = new ReentrantLock(lockFair);
 
+        //线程池非空监视器
         notEmpty = lock.newCondition();
+        //线程池为空监视器
         empty = lock.newCondition();
     }
 
@@ -1374,6 +1379,7 @@ public abstract class DruidAbstractDataSource extends WrapperAdapter implements 
     }
 
     public void validateConnection(Connection conn) throws SQLException {
+        //获取验证sql
         String query = getValidationQuery();
         if (conn.isClosed()) {
             throw new SQLException("validateConnection: connection closed");
@@ -1386,6 +1392,8 @@ public abstract class DruidAbstractDataSource extends WrapperAdapter implements 
                 result = validConnectionChecker.isValidConnection(conn, validationQuery, validationQueryTimeout);
 
                 if (result && onFatalError) {
+                    //初始化同一把锁，可重入锁
+                    //TODO 为什么又锁了一次，是不是这个方法兼容并发异步校验？？
                     lock.lock();
                     try {
                         if (onFatalError) {
@@ -1641,11 +1649,13 @@ public abstract class DruidAbstractDataSource extends WrapperAdapter implements 
     public Connection createPhysicalConnection(String url, Properties info) throws SQLException {
         Connection conn;
         if (getProxyFilters().size() == 0) {
+            //无过滤器，不需要代理，返回原始Connection
             conn = getDriver().connect(url, info);
         } else {
             conn = new FilterChainImpl(this).connection_connect(info);
         }
 
+        //更新当前连接池的Connection计数
         createCountUpdater.incrementAndGet(this);
 
         return conn;
@@ -1707,6 +1717,7 @@ public abstract class DruidAbstractDataSource extends WrapperAdapter implements 
         createStartNanosUpdater.set(this, connectStartNanos);
         creatingCountUpdater.incrementAndGet(this);
         try {
+            //创建Connection，根据连接池是否配置了Filter，拿到的可能是原始的，可能是代理的
             conn = createPhysicalConnection(url, physicalConnectProperties);
             connectedNanos = System.nanoTime();
 
@@ -1714,9 +1725,11 @@ public abstract class DruidAbstractDataSource extends WrapperAdapter implements 
                 throw new SQLException("connect error, url " + url + ", driverClass " + this.driverClass);
             }
 
+            //初始化连接
             initPhysicalConnection(conn, variables, globalVariables);
             initedNanos = System.nanoTime();
 
+            //配置了校验连接的话，执行连接校验
             validateConnection(conn);
             validatedNanos = System.nanoTime();
 
@@ -1803,6 +1816,7 @@ public abstract class DruidAbstractDataSource extends WrapperAdapter implements 
     }
 
     public void initPhysicalConnection(Connection conn, Map<String, Object> variables, Map<String, Object> globalVariables) throws SQLException {
+        //自动提交
         if (conn.getAutoCommit() != defaultAutoCommit) {
             conn.setAutoCommit(defaultAutoCommit);
         }
@@ -1813,6 +1827,7 @@ public abstract class DruidAbstractDataSource extends WrapperAdapter implements 
             }
         }
 
+        //事务管理器
         if (getDefaultTransactionIsolation() != null) {
             if (conn.getTransactionIsolation() != getDefaultTransactionIsolation().intValue()) {
                 conn.setTransactionIsolation(getDefaultTransactionIsolation());
@@ -1823,6 +1838,7 @@ public abstract class DruidAbstractDataSource extends WrapperAdapter implements 
             conn.setCatalog(getDefaultCatalog());
         }
 
+        //连接初始化sql
         Collection<String> initSqls = getConnectionInitSqls();
         if (initSqls.size() == 0
                 && variables == null
@@ -1832,6 +1848,7 @@ public abstract class DruidAbstractDataSource extends WrapperAdapter implements 
 
         Statement stmt = null;
         try {
+            //创建Statement，没别的作用就是执行初始化sql用
             stmt = conn.createStatement();
 
             for (String sql : initSqls) {
@@ -1847,6 +1864,7 @@ public abstract class DruidAbstractDataSource extends WrapperAdapter implements 
                 if (variables != null) {
                     ResultSet rs = null;
                     try {
+                        //显示变量
                         rs = stmt.executeQuery("show variables");
                         while (rs.next()) {
                             String name = rs.getString(1);

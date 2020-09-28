@@ -146,6 +146,7 @@ public class FilterChainImpl implements FilterChain {
 
     public ConnectionProxy connection_connect(Properties info) throws SQLException {
         if (this.pos < filterSize) {
+            //过滤器包装，类似tomcat的filter
             return nextFilter()
                     .connection_connect(this, info);
         }
@@ -153,12 +154,14 @@ public class FilterChainImpl implements FilterChain {
         Driver driver = dataSource.getRawDriver();
         String url = dataSource.getRawJdbcUrl();
 
+        //原始的Connection
         Connection nativeConnection = driver.connect(url, info);
 
         if (nativeConnection == null) {
             return null;
         }
 
+        //代理，单独的Connection id序列
         return new ConnectionProxyImpl(dataSource, nativeConnection, info, dataSource.createConnectionId());
     }
 
