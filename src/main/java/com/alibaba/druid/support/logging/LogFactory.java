@@ -23,6 +23,7 @@ public class LogFactory {
     private static Constructor logConstructor;
 
     static {
+        //命令行配置druid的日志实现类
         String logType= System.getProperty("druid.logType");
         if(logType != null){
             if(logType.equalsIgnoreCase("slf4j")){

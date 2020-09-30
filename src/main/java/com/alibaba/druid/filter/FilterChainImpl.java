@@ -146,11 +146,14 @@ public class FilterChainImpl implements FilterChain {
 
     public ConnectionProxy connection_connect(Properties info) throws SQLException {
         if (this.pos < filterSize) {
-            //过滤器包装，类似tomcat的filter
+            //责任链模式，这个很类似tomcat的filter链，this就是filterChain对象
             return nextFilter()
                     .connection_connect(this, info);
         }
 
+        //执行顺序和tomcat一样：
+        //filter1前置逻辑 -> filter2前置逻辑 -> 当前行下面的逻辑 -> filter2后置逻辑 -> filter1后置逻辑
+        //在过滤器实现里面，没有前置逻辑的话，下面这些行将是最先执行的，即创建被包装的原始连接
         Driver driver = dataSource.getRawDriver();
         String url = dataSource.getRawJdbcUrl();
 
@@ -161,7 +164,7 @@ public class FilterChainImpl implements FilterChain {
             return null;
         }
 
-        //代理，单独的Connection id序列
+        //代理，为连接增强id序列、封装对应数据源、过滤器、事务等信息
         return new ConnectionProxyImpl(dataSource, nativeConnection, info, dataSource.createConnectionId());
     }
 

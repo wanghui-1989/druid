@@ -35,7 +35,9 @@ import com.alibaba.druid.util.Utils;
 
 public class MySqlValidConnectionChecker extends ValidConnectionCheckerAdapter implements ValidConnectionChecker, Serializable {
 
+    //默认sql执行超时时间1ms
     public static final int DEFAULT_VALIDATION_QUERY_TIMEOUT = 1;
+    //默认验证sql
     public static final String DEFAULT_VALIDATION_QUERY = "SELECT 1";
 
     private static final long serialVersionUID = 1L;
@@ -53,10 +55,12 @@ public class MySqlValidConnectionChecker extends ValidConnectionCheckerAdapter i
             }
 
             if (clazz != null) {
+                //获取连接的public void pingInternal(boolean checkForClosedConnection, int timeoutMillis){}方法
                 ping = clazz.getMethod("pingInternal", boolean.class, int.class);
             }
 
             if (ping != null) {
+                //优先使用pingInternal
                 usePingMethod = true;
             }
         } catch (Exception e) {

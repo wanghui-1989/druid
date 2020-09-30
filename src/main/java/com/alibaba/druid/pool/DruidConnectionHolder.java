@@ -101,11 +101,14 @@ public final class DruidConnectionHolder {
         this.lastActiveTimeMillis = connectTimeMillis;
         this.lastExecTimeMillis   = connectTimeMillis;
 
+        //获取连接的事务自动提交设置
         this.underlyingAutoCommit = conn.getAutoCommit();
 
         if (conn instanceof WrapperProxy) {
+            //是包装、代理后的对象，即ConnectionProxyImpl类型对象，获取已经set的connection id
             this.connectionId = ((WrapperProxy) conn).getId();
         } else {
+            //原始对象，需要生成connection id
             this.connectionId = dataSource.createConnectionId();
         }
 
@@ -120,6 +123,7 @@ public final class DruidConnectionHolder {
             }
             if (initUnderlyHoldability) {
                 try {
+                    //当前连接对ResultSet的保存时效：ResultSet.HOLD_CURSORS_OVER_COMMIT，ResultSet.CLOSE_CURSORS_AT_COMMIT
                     this.underlyingHoldability = conn.getHoldability();
                 } catch (UnsupportedOperationException e) {
                     holdabilityUnsupported = true;
@@ -137,8 +141,10 @@ public final class DruidConnectionHolder {
             }
         }
 
+        //连接是否只读模式
         this.underlyingReadOnly = conn.isReadOnly();
         try {
+            //获取并设置连接的事务隔离级别
             this.underlyingTransactionIsolation = conn.getTransactionIsolation();
         } catch (SQLException e) {
             // compartible for alibaba corba
@@ -150,6 +156,7 @@ public final class DruidConnectionHolder {
             }
         }
 
+        //更新默认值
         this.defaultHoldability = underlyingHoldability;
         this.defaultTransactionIsolation = underlyingTransactionIsolation;
         this.defaultAutoCommit = underlyingAutoCommit;

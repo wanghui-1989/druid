@@ -235,7 +235,7 @@ public class DruidPooledConnection extends PoolableWrapper implements javax.sql.
     @Override
     public void close() throws SQLException {
         if (this.disable) {
-            //当前连接被禁用
+            //当前连接不可用
             return;
         }
 
@@ -318,7 +318,7 @@ public class DruidPooledConnection extends PoolableWrapper implements javax.sql.
 
     public void recycle() throws SQLException {
         if (this.disable) {
-            //当前连接被禁用
+            //当前连接不可用
             return;
         }
 
