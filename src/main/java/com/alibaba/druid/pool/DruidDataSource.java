@@ -3053,10 +3053,12 @@ public class DruidDataSource extends DruidAbstractDataSource implements DruidDat
 
         public DestroyConnectionThread(String name) {
             super(name);
+            //守护线程
             this.setDaemon(true);
         }
 
         public void run() {
+            //initedLatch-1，执行DataSource初始化的主线程阻塞在CountDownLatch，在等待继续执行
             initedLatch.countDown();
 
             for (; ; ) {
@@ -3074,7 +3076,7 @@ public class DruidDataSource extends DruidAbstractDataSource implements DruidDat
                     }
 
                     if (Thread.interrupted()) {
-                        //响应中断
+                        //响应线程池关闭动作
                         break;
                     }
 
@@ -3265,6 +3267,7 @@ public class DruidDataSource extends DruidAbstractDataSource implements DruidDat
         shrink(checkTime, keepAlive);
     }
 
+    //shrink 收缩的意思
     public void shrink(boolean checkTime, boolean keepAlive) {
         try {
             lock.lockInterruptibly();
@@ -3272,9 +3275,13 @@ public class DruidDataSource extends DruidAbstractDataSource implements DruidDat
             return;
         }
 
+        //是否需要生产连接，补充空闲连接池
         boolean needFill = false;
+        //删除的数量
         int evictCount = 0;
+        //保活数量
         int keepAliveCount = 0;
+        //
         int fatalErrorIncrement = fatalErrorCount - fatalErrorCountLastShrink;
         fatalErrorCountLastShrink = fatalErrorCount;
 
@@ -3283,80 +3290,139 @@ public class DruidDataSource extends DruidAbstractDataSource implements DruidDat
                 return;
             }
 
+            //配置的最小空闲连接数以外的连接数量
             final int checkCount = poolingCount - minIdle;
             final long currentTimeMillis = System.currentTimeMillis();
             for (int i = 0; i < poolingCount; ++i) {
+                //遍历获取空闲连接池连接
                 DruidConnectionHolder connection = connections[i];
 
-                if ((onFatalError || fatalErrorIncrement > 0) && (lastFatalErrorTimeMillis > connection.connectTimeMillis)) {
+                if ((onFatalError || fatalErrorIncrement > 0) //TODO 发生致命错误 或者 致命错误数有增长？？
+                        && (lastFatalErrorTimeMillis > connection.connectTimeMillis)) {
+                    //并且最后的致命错误发生在连接的连接动作之后
+                    //放入保活连接池
                     keepAliveConnections[keepAliveCount++] = connection;
                     continue;
                 }
 
+                //入参指定需要做超时检查
                 if (checkTime) {
+                    //配置的物理连接超时时间
                     if (phyTimeoutMillis > 0) {
+                        //物理连接操作持续时长 = for循环初次开始时间 - 连接操作开始时间
                         long phyConnectTimeMillis = currentTimeMillis - connection.connectTimeMillis;
                         if (phyConnectTimeMillis > phyTimeoutMillis) {
+                            //实际持续时长超时了，放入待删除连接池中
                             evictConnections[evictCount++] = connection;
                             continue;
                         }
                     }
 
+                    //空闲持续时长 = for循环初次开始时间 - 连接最后活跃时间
                     long idleMillis = currentTimeMillis - connection.lastActiveTimeMillis;
 
+                    //如果连接的空闲时长 达到 可以被删除的最小空闲时长 就可以被回收删除了
+                    // 如果达到了 可以被删除的最大空闲时长 是一定要被回收删除的
+                    // 这里还加了一个保活操作 就是当属于minIdle数量以内的连接达到了 minEvictableIdleTimeMillis时，
+                    // 优先考虑保活，不是考虑回收删除，这样维持连接池的数量达到minIdle的要求
+                    // 所以一般配置的keepAliveBetweenTimeMillis值 是大于 minEvictableIdleTimeMillis的
+                    // 这里的两个判断，后一个有点不理解，应该是防止人为配置错误，配置成keepAliveBetweenTimeMillis<minEvictableIdleTimeMillis
+                    // 可能出现的时间顺序有：
+                    //起点-->minEvictableIdleTimeMillis-->keepAliveBetweenTimeMillis-->maxEvictableIdleTimeMillis
+                    //起点-->keepAliveBetweenTimeMillis-->minEvictableIdleTimeMillis-->maxEvictableIdleTimeMillis
+                    //实际空闲时长 没有达到 可以被删除的最小空闲时长 && 也没有达到可以保活的空闲时长
                     if (idleMillis < minEvictableIdleTimeMillis && idleMillis < keepAliveBetweenTimeMillis) {
+                        //退出遍历空闲连接池connections，不继续循环了，为什么呢？
+                        //因为对于空闲连接池的操作一共可以分为两种，一个放连接，一个取连接
+                        //放连接是从头开始放，取连接是从尾开始取，
+                        // 这样的话越是在数组前面的连接一定越是空闲时间更长的，从前往后遍历，如果最前面的都没有达到删除和保活的要求，
+                        //  那后面的一定也没有达到，这样就不需要再继续判断了，退出遍历即可。
                         break;
                     }
 
+                    //实际空闲时长 已经达到 可以被删除的最小空闲时长
                     if (idleMillis >= minEvictableIdleTimeMillis) {
                         if (checkTime && i < checkCount) {
+                            //需要超时检查 并且 属于最小空闲连接数以外的连接
+                            //放入待删除连接池，相当于从头开始删除
                             evictConnections[evictCount++] = connection;
                             continue;
                         } else if (idleMillis > maxEvictableIdleTimeMillis) {
+                            //当前连接下标 属于最小空闲连接数以内的连接
+                            //但是实际空闲时长 超过了 可以被删除的最大空闲时长，这种一定要被删除，放入待删除连接池
                             evictConnections[evictCount++] = connection;
                             continue;
                         }
                     }
 
+                    //走到这有的几种情况：
+                    // 1. idleMillis >= minEvictableIdleTimeMillis 并且 当前连接下标 属于最小空闲连接数以内的连接 但是没有达到 可以被删除的最大空闲时长
+                    // 2. idleMillis < minEvictableIdleTimeMillis 但是 idleMillis >= keepAliveBetweenTimeMillis
+                    //入参指定要保活 并且 空闲时长 达到了 保活的空闲时长要求
+                    //证明不指定保活的话，这些连接也就真的被删除了
                     if (keepAlive && idleMillis >= keepAliveBetweenTimeMillis) {
+                        //放入保活连接池
                         keepAliveConnections[keepAliveCount++] = connection;
                     }
                 } else {
+                    //入参指定不需要做超时检查
                     if (i < checkCount) {
+                        //当前连接下标属于最小空闲连接数以外的连接  放入待删除连接池
                         evictConnections[evictCount++] = connection;
                     } else {
+                        //剩下的都属于最小空闲连接数以内的连接，不需要再判读删除了，退出循环
                         break;
                     }
                 }
             }
 
+            //删除数量 = 待删除数量 + 保活数量
+            //对空闲连接池来说，要删除的数量就是这些，至于保活，删完了，后面有保活操作的话，会把保活连接再放回来
             int removeCount = evictCount + keepAliveCount;
             if (removeCount > 0) {
+                //把空闲连接池分为两部分，0到removeCount-1，是空闲时间较长的，
+                //removeCount到poolingCount是符合minIdle数量要求的，删除前面的连接，然后移动后面的连接，可以直接使用数组拷贝，
+                //拷贝后面的连接 覆盖 前面的连接 然后 重置数组后面的位置为null
                 System.arraycopy(connections, removeCount, connections, 0, poolingCount - removeCount);
+                //对空闲连接池，用null填充后面的位置
                 Arrays.fill(connections, poolingCount - removeCount, poolingCount, null);
+                //更新空闲连接池计数
                 poolingCount -= removeCount;
             }
+            //更新总保活计数
             keepAliveCheckCount += keepAliveCount;
 
+            //保活 并且 空闲连接数量 + 活跃数量 < 配置的最小连接数量
             if (keepAlive && poolingCount + activeCount < minIdle) {
+                //连接不足 需要生产连接 补充连接池
+                //如果没配置保活的话，配置的minIdle数量以内的连接，
+                // 满足一定的条件时(主要为checkTime==true && idleMillis > maxEvictableIdleTimeMillis)，也是会被删除的。
+                // 空闲连接池可能被删到空了，所以想保证有minIdle个空闲连接的话，keepAlive一定要配置为true
                 needFill = true;
             }
         } finally {
+            //释放锁
             lock.unlock();
         }
 
+        //如果待删除连接池的长度 > 0
         if (evictCount > 0) {
+            //遍历关闭连接
             for (int i = 0; i < evictCount; ++i) {
                 DruidConnectionHolder item = evictConnections[i];
                 Connection connection = item.getConnection();
+                //关闭物理连接
                 JdbcUtils.close(connection);
                 destroyCountUpdater.incrementAndGet(this);
             }
+            //删完，重置整个待删除连接池数组
             Arrays.fill(evictConnections, null);
         }
 
+        //如果要保活的数量>0
         if (keepAliveCount > 0) {
             // keep order
+            //保活连接池是从前往后遍历放的，因为后面的一定空闲时间更短，所以从后往前遍历保活
             for (int i = keepAliveCount - 1; i >= 0; --i) {
                 DruidConnectionHolder holer = keepAliveConnections[i];
                 Connection connection = holer.getConnection();
@@ -3364,6 +3430,7 @@ public class DruidDataSource extends DruidAbstractDataSource implements DruidDat
 
                 boolean validate = false;
                 try {
+                    //验证连接是否有效，没抛异常就是有效
                     this.validateConnection(connection);
                     validate = true;
                 } catch (Throwable error) {
@@ -3373,16 +3440,21 @@ public class DruidDataSource extends DruidAbstractDataSource implements DruidDat
                     // skip
                 }
 
+                //是否丢弃这个连接
                 boolean discard = !validate;
                 if (validate) {
+                    //连接有效
                     holer.lastKeepTimeMillis = System.currentTimeMillis();
+                    //保活 再放回到空闲连接池里去 放到最后面
                     boolean putOk = put(holer, 0L);
                     if (!putOk) {
+                        //放不回去 就不保活了 丢弃
                         discard = true;
                     }
                 }
 
                 if (discard) {
+                    //丢弃
                     try {
                         connection.close();
                     } catch (Exception e) {
@@ -3391,9 +3463,12 @@ public class DruidDataSource extends DruidAbstractDataSource implements DruidDat
 
                     lock.lock();
                     try {
+                        //更新丢弃计数
                         discardCount++;
 
+                        //如果活跃数+空闲数 <= 配置的最小空闲数
                         if (activeCount + poolingCount <= minIdle) {
+                            //关了一个，再唤醒一个生产者线程
                             emptySignal();
                         }
                     } finally {
@@ -3401,15 +3476,21 @@ public class DruidDataSource extends DruidAbstractDataSource implements DruidDat
                     }
                 }
             }
+            //统计计数更新总的保活计数
             this.getDataSourceStat().addKeepAliveCheckCount(keepAliveCount);
+            //清空保活连接池
             Arrays.fill(keepAliveConnections, null);
         }
 
+        //连接不足 需要生产连接
+        //needFill默认为false，开启保活的话，会根据情况更新为true
         if (needFill) {
             lock.lock();
             try {
+                //需要补充的数量 最后连接总数量要达到配置的最小空闲连接数
                 int fillCount = minIdle - (activeCount + poolingCount + createTaskCount);
                 for (int i = 0; i < fillCount; ++i) {
+                    //唤醒一个生产者线程
                     emptySignal();
                 }
             } finally {
@@ -3418,6 +3499,7 @@ public class DruidDataSource extends DruidAbstractDataSource implements DruidDat
         } else if (onFatalError || fatalErrorIncrement > 0) {
             lock.lock();
             try {
+                //唤醒有问题，再唤醒一个等待中的其他生产者
                 emptySignal();
             } finally {
                 lock.unlock();

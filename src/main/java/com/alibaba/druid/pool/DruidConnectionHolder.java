@@ -49,6 +49,7 @@ public final class DruidConnectionHolder {
     protected final Connection                    conn;
     protected final List<ConnectionEventListener> connectionEventListeners = new CopyOnWriteArrayList<ConnectionEventListener>();
     protected final List<StatementEventListener>  statementEventListeners  = new CopyOnWriteArrayList<StatementEventListener>();
+    //连接操作开始时间
     protected final long                          connectTimeMillis;
     protected volatile long                       lastActiveTimeMillis;
     protected volatile long                       lastExecTimeMillis;
@@ -97,6 +98,7 @@ public final class DruidConnectionHolder {
         this.variables = variables;
         this.globleVariables = globleVariables;
 
+        //连接操作开始时间
         this.connectTimeMillis = System.currentTimeMillis();
         this.lastActiveTimeMillis = connectTimeMillis;
         this.lastExecTimeMillis   = connectTimeMillis;
