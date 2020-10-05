@@ -292,6 +292,7 @@ public abstract class DruidAbstractDataSource extends WrapperAdapter implements 
     //连续失败
     protected volatile int failContinuous = 0;
     protected volatile long failContinuousTimeMillis = 0L;
+    //应该是为编程预留的
     protected ScheduledExecutorService destroyScheduler;
     protected ScheduledExecutorService createScheduler;
 
