@@ -253,9 +253,9 @@ public abstract class DruidAbstractDataSource extends WrapperAdapter implements 
     protected boolean useOracleImplicitCache = true;
 
     protected ReentrantLock lock;
-    //生产者消费者模型中的监视器，消费者监视器，控制消费者阻塞等待和唤醒。个人感觉和生产者监视器命名反了，应该为empty。
+    //生产者消费者模型中的监视器，消费者监视器，控制消费者阻塞等待和唤醒。
     protected Condition notEmpty;
-    //生产者消费者模型中的监视器，生产者监视器，控制生产者阻塞等待和唤醒。个人感觉和消费者监视器命名反了，应该为full。
+    //生产者消费者模型中的监视器，生产者监视器，控制生产者阻塞等待和唤醒。
     protected Condition empty;
     //活跃连接池activeConnections的锁
     protected ReentrantLock activeConnectionLock = new ReentrantLock();

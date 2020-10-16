@@ -2944,7 +2944,7 @@ public class DruidDataSource extends DruidAbstractDataSource implements DruidDat
 
                 try {
                     //创建连接线程，是生产者-消费者模型中的生产者
-                    //默认当前生产者线程阻塞等待，不创建新连接，感觉命名反了，这里应为fullWait
+                    //默认当前生产者线程阻塞等待，不创建新连接
                     boolean emptyWait = true;
 
                     if (createError != null //整个DataSource创建Connection时出现过错误
